@@ -1,0 +1,16 @@
+{
+  "name": "fxh-forex-crypto-watcher",
+  "version": "1.0.0",
+  "description": "100% Free ($0/mo) 24/7 Forex, Gold & Crypto WebSocket Watcher Engine for Hugging Face Spaces",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "firebase-admin": "^12.4.0",
+    "ws": "^8.18.0"
+  }
+}
