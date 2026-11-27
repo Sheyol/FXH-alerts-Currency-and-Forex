@@ -380,12 +380,10 @@ module.exports = async (req, res) => {
     }
 
     if (req.method === 'POST' && urlPath.startsWith('/telegram-webhook')) {
-      const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
-      if (expectedSecret) {
-        const providedSecret = req.headers['x-telegram-bot-api-secret-token'];
-        if (providedSecret !== expectedSecret) {
-          return res.status(401).json({ error: 'Unauthorized' });
-        }
+      const expectedSecret = telegramBot.webhookSecret;
+      const providedSecret = req.headers['x-telegram-bot-api-secret-token'];
+      if (!expectedSecret || providedSecret !== expectedSecret) {
+        return res.status(401).json({ error: 'Unauthorized' });
       }
       await telegramBot.processUpdate(req.body);
       return res.status(200).json({ ok: true });

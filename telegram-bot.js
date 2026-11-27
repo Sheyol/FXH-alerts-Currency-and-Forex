@@ -65,6 +65,14 @@ class MonitorService {
     this.secretToken =
       process.env.MONITOR_SECRET_TOKEN ||
       '';
+    this.webhookSecret =
+      process.env.TELEGRAM_WEBHOOK_SECRET ||
+      (this.secretToken || this.botToken
+        ? crypto
+            .createHmac('sha256', this.secretToken || this.botToken)
+            .update('fxh-tg-webhook-v1')
+            .digest('hex')
+        : '');
 
     this.authorizedIds = new Set(
       [this.developerChatId.toString().trim()].filter(Boolean)
@@ -132,7 +140,7 @@ class MonitorService {
 
   async _registerWebhook(appUrl) {
     const webhookUrl = `${appUrl.replace(/\/$/, '')}/telegram-webhook`;
-    const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET;
+    const webhookSecret = this.webhookSecret;
     const result = await telegramApi(
       'setWebhook',
       {
@@ -627,7 +635,7 @@ class MonitorService {
       const { count: proUsers } = await supabase
         .from('profiles')
         .select('*', { count: 'exact', head: true })
-        .or(`is_pro.eq.true,pro_expires_at.gt.${nowIso}`);
+        .gt('global_expires_at', nowIso);
       const { data: rawActiveRows } = await supabase
         .from('user_alerts')
         .select('symbol')
@@ -703,10 +711,11 @@ class MonitorService {
     const chatId = msg.chat.id;
 
     try {
+      const nowIso = new Date().toISOString();
       const { count: proUsers } = await supabase
         .from('profiles')
         .select('*', { count: 'exact', head: true })
-        .eq('is_pro', true);
+        .gt('global_expires_at', nowIso);
 
       const mrr = (proUsers || 0) * 6.99;
       const arr = mrr * 12;
@@ -797,10 +806,11 @@ class MonitorService {
       const { count: total } = await supabase
         .from('profiles')
         .select('*', { count: 'exact', head: true });
+      const nowIso = new Date().toISOString();
       const { count: pro } = await supabase
         .from('profiles')
         .select('*', { count: 'exact', head: true })
-        .eq('is_pro', true);
+        .gt('global_expires_at', nowIso);
       const conversionRate = total > 0 ? ((pro / total) * 100).toFixed(1) : '0.0';
 
       const {
@@ -1146,10 +1156,11 @@ class MonitorService {
       const { count: totalUsers } = await supabase
         .from('profiles')
         .select('*', { count: 'exact', head: true });
+      const nowIso = new Date().toISOString();
       const { count: proUsers } = await supabase
         .from('profiles')
         .select('*', { count: 'exact', head: true })
-        .eq('is_pro', true);
+        .gt('global_expires_at', nowIso);
       const conversionRate =
         totalUsers > 0 ? ((proUsers / totalUsers) * 100).toFixed(1) : '0.0';
       const mrr = (proUsers || 0) * 6.99;
