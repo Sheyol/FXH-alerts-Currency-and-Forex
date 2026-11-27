@@ -635,7 +635,14 @@ class MonitorService {
         .neq('symbol', 'DELETE_ACCOUNT_REQUEST');
       const dbActiveRows = (rawActiveRows || []).filter((r) => {
         const s = (r.symbol || '').trim().toUpperCase();
-        return s.startsWith('FRX') || s.startsWith('OTC_') || s.endsWith('USDT') || s.endsWith('USD');
+        return (
+          s.startsWith('FRX') ||
+          s.startsWith('OTC_') ||
+          s.endsWith('=F') ||
+          s === 'DX-Y.NYB' ||
+          s.endsWith('USDT') ||
+          s.endsWith('USD')
+        );
       });
       const { data: rawTriggeredToday } = await supabase
         .from('user_alerts')
@@ -644,7 +651,14 @@ class MonitorService {
         .gte('triggered_at', startOfTodayIso);
       const triggeredTodayCount = (rawTriggeredToday || []).filter((r) => {
         const s = (r.symbol || '').trim().toUpperCase();
-        return s.startsWith('FRX') || s.startsWith('OTC_') || s.endsWith('USDT') || s.endsWith('USD');
+        return (
+          s.startsWith('FRX') ||
+          s.startsWith('OTC_') ||
+          s.endsWith('=F') ||
+          s === 'DX-Y.NYB' ||
+          s.endsWith('USDT') ||
+          s.endsWith('USD')
+        );
       }).length;
 
       const stats = this.supabaseService
@@ -729,7 +743,14 @@ class MonitorService {
         .neq('symbol', 'DELETE_ACCOUNT_REQUEST');
       const fxRows = (allRows || []).filter((r) => {
         const s = (r.symbol || '').trim().toUpperCase();
-        return s.startsWith('FRX') || s.startsWith('OTC_') || s.endsWith('USDT') || s.endsWith('USD');
+        return (
+          s.startsWith('FRX') ||
+          s.startsWith('OTC_') ||
+          s.endsWith('=F') ||
+          s === 'DX-Y.NYB' ||
+          s.endsWith('USDT') ||
+          s.endsWith('USD')
+        );
       });
 
       const activeCount = fxRows.filter((r) => r.status === 'active').length;

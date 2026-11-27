@@ -15,7 +15,13 @@ const DEFAULT_FOREX_TARGETS = new Set([
   'frxGBPJPY',
   'frxXAUUSD',
   'frxXAGUSD',
-  'frxBROUSD',
+  'OTC_NDX',
+  'OTC_DJI',
+  'OTC_SPC',
+  'DX-Y.NYB',
+  'NQ=F',
+  'ES=F',
+  'CL=F',
 ]);
 
 const DEFAULT_CRYPTO_TARGETS = new Set([
@@ -35,10 +41,36 @@ function isForexWeekendClosed(now = new Date()) {
   return false;
 }
 
+function isFuturesOrDxySymbol(symbol) {
+  const s = (symbol || '').toUpperCase();
+  return s.endsWith('=F') || s === 'DX-Y.NYB';
+}
+
 function formatDisplayName(symbol) {
-  if (symbol === 'frxXAUUSD') return 'XAU/USD (Gold)';
-  if (symbol === 'frxXAGUSD') return 'XAG/USD (Silver)';
-  if (symbol === 'frxBROUSD') return 'BRENT/USD (Oil)';
+  const map = {
+    frxXAUUSD: 'XAU/USD (Gold)',
+    frxXAGUSD: 'XAG/USD (Silver)',
+    'DX-Y.NYB': 'DXY (US Dollar Index)',
+    OTC_NDX: 'NAS100 (US Tech 100)',
+    OTC_DJI: 'US30 (Wall Street 30)',
+    OTC_SPC: 'SPX500 (US 500)',
+    OTC_GDAXI: 'GER40 (Germany 40)',
+    OTC_FTSE: 'UK100 (FTSE 100)',
+    OTC_N225: 'JPN225 (Nikkei 225)',
+    'NQ=F': 'NQ (E-Mini Nasdaq 100 Futures)',
+    'ES=F': 'ES (E-Mini S&P 500 Futures)',
+    'YM=F': 'YM (Mini Dow Futures)',
+    'RTY=F': 'RTY (Russell 2000 Futures)',
+    'GC=F': 'GC (COMEX Gold Futures)',
+    'SI=F': 'SI (COMEX Silver Futures)',
+    'CL=F': 'CL (WTI Crude Oil Futures)',
+    'BZ=F': 'BZ (Brent Crude Oil Futures)',
+    'NG=F': 'NG (Natural Gas Futures)',
+    'HG=F': 'HG (Copper Futures)',
+    'ZB=F': 'ZB (30Y T-Bond Futures)',
+    '6E=F': '6E (Euro FX Futures)',
+  };
+  if (map[symbol]) return map[symbol];
   if (symbol.startsWith('frx') && symbol.length === 9) {
     return `${symbol.slice(3, 6)}/${symbol.slice(6, 9)}`;
   }
@@ -49,8 +81,12 @@ function formatDisplayName(symbol) {
 }
 
 function categorizeSymbol(symbol) {
-  if (symbol.includes('XAU') || symbol.includes('XAG')) return 'Gold & Metals';
-  if (symbol.startsWith('frx') || symbol.startsWith('OTC_')) return 'Forex Majors';
+  if (symbol.endsWith('=F')) return 'Futures';
+  if (symbol.startsWith('OTC_') || symbol === 'DX-Y.NYB') return 'Indices';
+  if (symbol.includes('XAU') || symbol.includes('XAG') || symbol.includes('XPT') || symbol.includes('XPD')) {
+    return 'Gold & Metals';
+  }
+  if (symbol.startsWith('frx')) return 'Forex Majors';
   return 'Crypto Majors';
 }
 
@@ -177,28 +213,58 @@ function fetchDerivLatestPrices(symbols, timeoutMs = 4500) {
   });
 }
 
+async function fetchFuturesAndDxyPrices(symbols) {
+  const quotes = new Map();
+  if (symbols.length === 0) return quotes;
+
+  await Promise.all(
+    symbols.map(async (sym) => {
+      try {
+        const res = await fetch(
+          `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=1m&range=1d`,
+          {
+            headers: { 'User-Agent': 'Mozilla/5.0' },
+            signal: AbortSignal.timeout(5000),
+          }
+        );
+        if (!res.ok) return;
+        const data = await res.json();
+        const price = parseFloat(data?.chart?.result?.[0]?.meta?.regularMarketPrice);
+        if (!isNaN(price) && price > 0) {
+          quotes.set(sym, price);
+        }
+      } catch (_) {}
+    })
+  );
+  return quotes;
+}
+
 async function runServerlessPriceSweep() {
   await supabaseService.syncActiveAlerts();
   const activeSymbols = Array.from(supabaseService.alertsBySymbol.keys());
 
+  const futuresSymbols = activeSymbols.filter((s) => isFuturesOrDxySymbol(s));
   const derivSymbols = activeSymbols.filter(
-    (s) => s.startsWith('frx') || s.startsWith('OTC_')
+    (s) => !isFuturesOrDxySymbol(s) && (s.startsWith('frx') || s.startsWith('OTC_'))
   );
   const cryptoSymbols = activeSymbols.filter(
-    (s) => !s.startsWith('frx') && !s.startsWith('OTC_')
+    (s) => !isFuturesOrDxySymbol(s) && !s.startsWith('frx') && !s.startsWith('OTC_')
   );
 
-  for (const s of derivSymbols) forexShardProxy.subscribedSymbols.add(s);
+  for (const s of [...derivSymbols, ...futuresSymbols]) forexShardProxy.subscribedSymbols.add(s);
   for (const s of cryptoSymbols) cryptoShardProxy.targetSymbols.add(s);
 
   const weekendClosed = isForexWeekendClosed();
   const needBinance =
     cryptoSymbols.length > 0 || (weekendClosed && derivSymbols.includes('frxXAUUSD'));
 
-  const [binanceQuotes, derivQuotes] = await Promise.all([
+  const [binanceQuotes, derivQuotes, futuresQuotes] = await Promise.all([
     needBinance ? fetchBinancePrices(cryptoSymbols) : Promise.resolve(new Map()),
     !weekendClosed && derivSymbols.length > 0
       ? fetchDerivLatestPrices(derivSymbols)
+      : Promise.resolve(new Map()),
+    !weekendClosed && futuresSymbols.length > 0
+      ? fetchFuturesAndDxyPrices(futuresSymbols)
       : Promise.resolve(new Map()),
   ]);
 
@@ -220,6 +286,17 @@ async function runServerlessPriceSweep() {
     if ((!price || isNaN(price)) && sym === 'frxXAUUSD') {
       price = binanceQuotes.get('PAXGUSDT');
     }
+    if (price && !isNaN(price)) {
+      evaluatedCount++;
+      supabaseService.checkTick(sym, price, {
+        displayName: formatDisplayName(sym),
+        category: categorizeSymbol(sym),
+      });
+    }
+  }
+
+  for (const sym of futuresSymbols) {
+    const price = futuresQuotes.get(sym);
     if (price && !isNaN(price)) {
       evaluatedCount++;
       supabaseService.checkTick(sym, price, {

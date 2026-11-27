@@ -67,8 +67,14 @@ class SupabaseService {
       for (const alert of data || []) {
         if (!alert.symbol) continue;
         const sym = alert.symbol.trim().toUpperCase();
-        // Isolate Forex, Gold, Metals & Crypto alerts from sister app synthetic index alerts
-        const isForexCrypto = sym.startsWith('FRX') || sym.startsWith('OTC_') || sym.endsWith('USDT') || sym.endsWith('USD');
+        // Isolate Forex, Gold, Metals, Indices, Futures & Crypto alerts from sister app synthetic index alerts
+        const isForexCrypto =
+          sym.startsWith('FRX') ||
+          sym.startsWith('OTC_') ||
+          sym.endsWith('=F') ||
+          sym === 'DX-Y.NYB' ||
+          sym.endsWith('USDT') ||
+          sym.endsWith('USD');
         if (!isForexCrypto) continue;
         if (alert.app_type && alert.app_type !== 'forex_crypto') continue;
 
