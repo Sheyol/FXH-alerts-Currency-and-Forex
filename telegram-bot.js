@@ -317,6 +317,9 @@ class MonitorService {
         await this._handleForceSync(msg);
       } else if (text === '/check_exploits') {
         await this._handleCheckExploits(msg);
+      } else if (text === '/upgrade' || text.startsWith('/upgrade ')) {
+        const parts = text.split(/\s+/);
+        await this._handleUpgrade(msg, parts.slice(1));
       } else if (text === '/help' || text === '/start') {
         await this._handleHelp(msg);
       }
@@ -536,7 +539,7 @@ class MonitorService {
               [{ text: '/status' }, { text: '/revenue' }, { text: '/alerts' }],
               [{ text: '/users' }, { text: '/shards' }, { text: '/system' }],
               [{ text: '/database' }, { text: '/force_sync' }, { text: '/check_exploits' }],
-              [{ text: '/help' }],
+              [{ text: '/upgrade' }, { text: '/help' }],
             ],
             resize_keyboard: true,
             one_time_keyboard: false,
@@ -1023,6 +1026,7 @@ class MonitorService {
       `\`/maintenance [on|off]\` — Toggle maintenance mode redirects\n` +
       `\`/force_sync\` — Force reload alerts from Supabase database\n` +
       `\`/check_exploits\` — Scan for system exploits, anomalies, and unreviewed security flags\n` +
+      `\`/upgrade <user> [days]\` — Grant/check/revoke Pro by username, email, or ref code\n` +
       `\`/help\` — Print this help message`;
 
     await this.sendMessage(msg.chat.id, response, {
@@ -1032,12 +1036,249 @@ class MonitorService {
           [{ text: '/status' }, { text: '/revenue' }, { text: '/alerts' }],
           [{ text: '/users' }, { text: '/shards' }, { text: '/system' }],
           [{ text: '/database' }, { text: '/force_sync' }, { text: '/check_exploits' }],
-          [{ text: '/help' }],
+          [{ text: '/upgrade' }, { text: '/help' }],
         ],
         resize_keyboard: true,
         one_time_keyboard: false,
       },
     });
+  }
+
+  async _handleUpgrade(msg, args) {
+    const chatId = msg.chat.id;
+    const cleanMd = (v) => String(v ?? '').replace(/`/g, '').trim();
+
+    if (!args || args.length === 0) {
+      const usage =
+        `⚡ *FXH Pro Upgrade Manager*\n` +
+        `─────────────────────\n` +
+        `\`/upgrade <username>\` — Grant *30d Global Pro*\n` +
+        `\`/upgrade <username> <days|lifetime>\` — Custom duration (e.g. \`7\`, \`90\`, \`365\`, \`lifetime\`)\n` +
+        `\`/upgrade <username> <days|lifetime> bundle\` — Grant *All-Access Bundle* (Global + Synthetic)\n` +
+        `\`/upgrade <username> check\` — Check user's Pro expiry, points & ref code\n` +
+        `\`/upgrade <username> off [global|bundle]\` — Revoke Pro immediately\n\n` +
+        `_Lookup supports \`@username\`, \`email\`, or \`referral_code\`._`;
+      await this.sendMessage(chatId, usage, { parse_mode: 'Markdown' });
+      return;
+    }
+
+    try {
+      const rawTarget = args[0].trim();
+      const cleaned = rawTarget.startsWith('@') ? rawTarget.slice(1).trim() : rawTarget;
+      const ilikeSafe = cleaned.replace(/([\\%_])/g, '\\$1');
+      const selectCols =
+        'id, username, referral_code, points, is_pro, pro_expires_at, global_expires_at, synthetic_expires_at';
+
+      let profile = null;
+      let resolvedEmail = null;
+
+      // 1. Lookup by exact username (case-insensitive)
+      const { data: byUser, error: userErr } = await supabase
+        .from('profiles')
+        .select(selectCols)
+        .ilike('username', ilikeSafe)
+        .limit(5);
+      if (userErr) throw userErr;
+      profile = (byUser || []).find(
+        (r) => (r.username || '').toLowerCase() === cleaned.toLowerCase()
+      );
+
+      // 2. Fallback lookup by referral_code (case-insensitive)
+      if (!profile) {
+        const { data: byRef, error: refErr } = await supabase
+          .from('profiles')
+          .select(selectCols)
+          .ilike('referral_code', ilikeSafe)
+          .limit(5);
+        if (refErr) throw refErr;
+        profile = (byRef || []).find(
+          (r) => (r.referral_code || '').toLowerCase() === cleaned.toLowerCase()
+        );
+      }
+
+      // 3. Fallback lookup by auth email
+      if (!profile && cleaned.includes('@')) {
+        const {
+          data: { users },
+          error: authErr,
+        } = await supabase.auth.admin.listUsers({ page: 1, perPage: 1000 });
+        if (authErr) throw authErr;
+        const matchedAuth = (users || []).find(
+          (u) => (u.email || '').toLowerCase() === cleaned.toLowerCase()
+        );
+        if (matchedAuth) {
+          resolvedEmail = matchedAuth.email;
+          const { data: byId, error: idErr } = await supabase
+            .from('profiles')
+            .select(selectCols)
+            .eq('id', matchedAuth.id)
+            .maybeSingle();
+          if (idErr) throw idErr;
+          profile = byId;
+        }
+      }
+
+      if (!profile) {
+        await this.sendMessage(
+          chatId,
+          `❌ User not found for \`${cleanMd(cleaned)}\`.\nTry their exact username, referral code, or registered email.`,
+          { parse_mode: 'Markdown' }
+        );
+        return;
+      }
+
+      const displayUser = cleanMd(profile.username || resolvedEmail || profile.id);
+      const nowMs = Date.now();
+      const nowIso = new Date(nowMs).toISOString();
+      const arg1 = (args[1] || '30').toLowerCase();
+
+      // Mode 1: Check user status
+      if (arg1 === 'check' || arg1 === 'info' || arg1 === 'status') {
+        const gExpMs = profile.global_expires_at ? Date.parse(profile.global_expires_at) : 0;
+        const sExpMs = profile.pro_expires_at ? Date.parse(profile.pro_expires_at) : 0;
+        const gActive = gExpMs > nowMs;
+        const sActive = Boolean(profile.is_pro) || sExpMs > nowMs;
+
+        const infoMsg =
+          `👤 *User Pro Status*\n` +
+          `─────────────────────\n` +
+          `Username: \`@${displayUser}\`\n` +
+          `User ID: \`${cleanMd(profile.id)}\`\n` +
+          `Ref Code: \`${cleanMd(profile.referral_code || 'N/A')}\` | Points: \`${profile.points || 0}\`\n` +
+          `Global Pro: ${gActive ? '🟢 *ACTIVE*' : '⚪ FREE'} (\`${cleanMd(profile.global_expires_at || 'none')}\`)\n` +
+          `Synthetic Pro: ${sActive ? '🟢 *ACTIVE*' : '⚪ FREE'} (\`${cleanMd(profile.pro_expires_at || 'none')}\`)`;
+        await this.sendMessage(chatId, infoMsg, { parse_mode: 'Markdown' });
+        return;
+      }
+
+      // Mode 2: Revoke Pro
+      if (arg1 === 'off' || arg1 === '0' || arg1 === 'revoke') {
+        const revokeTierRaw = (args[2] || 'global').toLowerCase();
+        const revokeTier = revokeTierRaw === 'all' ? 'bundle' : revokeTierRaw;
+        if (!['global', 'bundle', 'synthetic'].includes(revokeTier)) {
+          await this.sendMessage(
+            chatId,
+            `❌ Invalid revoke scope \`${cleanMd(revokeTierRaw)}\`. Use \`global\`, \`bundle\`, or \`synthetic\`.`,
+            { parse_mode: 'Markdown' }
+          );
+          return;
+        }
+
+        const updates = { updated_at: nowIso };
+        if (revokeTier === 'global' || revokeTier === 'bundle') {
+          updates.global_expires_at = null;
+        }
+        if (revokeTier === 'bundle' || revokeTier === 'synthetic') {
+          updates.synthetic_expires_at = null;
+          updates.pro_expires_at = null;
+          updates.is_pro = false;
+        }
+
+        const { error: revErr } = await supabase
+          .from('profiles')
+          .update(updates)
+          .eq('id', profile.id);
+        if (revErr) throw revErr;
+
+        const tierLabel =
+          revokeTier === 'bundle'
+            ? 'All-Access Bundle (Global + Synthetic)'
+            : revokeTier === 'synthetic'
+              ? 'Synthetic Pro'
+              : 'Global Pro';
+
+        await this.sendMessage(
+          chatId,
+          `🚫 *Pro Revoked*\n` +
+            `─────────────────────\n` +
+            `User: \`@${displayUser}\`\n` +
+            `Scope: *${tierLabel}*`,
+          { parse_mode: 'Markdown' }
+        );
+        return;
+      }
+
+      // Mode 3: Grant / Extend Pro
+      let days;
+      let tier;
+      if (['global', 'bundle', 'all', 'synthetic'].includes(arg1) && !args[2]) {
+        days = 30;
+        tier = arg1 === 'all' ? 'bundle' : arg1;
+      } else {
+        days =
+          arg1 === 'lifetime' || arg1 === 'forever' ? 36500 : parseInt(arg1, 10);
+        const tierRaw = (args[2] || 'global').toLowerCase();
+        tier = tierRaw === 'all' ? 'bundle' : tierRaw;
+      }
+
+      if (
+        !Number.isInteger(days) ||
+        days < 1 ||
+        days > 36500 ||
+        !['global', 'bundle', 'synthetic'].includes(tier)
+      ) {
+        await this.sendMessage(
+          chatId,
+          `❌ Invalid arguments.\nExample: \`/upgrade @${displayUser} 30\` or \`/upgrade @${displayUser} 30 bundle\``,
+          { parse_mode: 'Markdown' }
+        );
+        return;
+      }
+
+      const addMs = days * 86400 * 1000;
+      const prevGlobalMs = profile.global_expires_at ? Date.parse(profile.global_expires_at) : 0;
+      const newGlobalIso = new Date(Math.max(prevGlobalMs || 0, nowMs) + addMs).toISOString();
+
+      const prevSynMs = Math.max(
+        profile.synthetic_expires_at ? Date.parse(profile.synthetic_expires_at) : 0,
+        profile.pro_expires_at ? Date.parse(profile.pro_expires_at) : 0
+      );
+      const newSynIso = new Date(Math.max(prevSynMs || 0, nowMs) + addMs).toISOString();
+
+      const updates = { updated_at: nowIso };
+      if (tier === 'global' || tier === 'bundle') {
+        updates.global_expires_at = newGlobalIso;
+      }
+      if (tier === 'bundle' || tier === 'synthetic') {
+        updates.synthetic_expires_at = newSynIso;
+        updates.pro_expires_at = newSynIso;
+        updates.is_pro = true;
+      }
+
+      const { error: upErr } = await supabase
+        .from('profiles')
+        .update(updates)
+        .eq('id', profile.id);
+      if (upErr) throw upErr;
+
+      const planLabel =
+        tier === 'bundle'
+          ? 'All-Access Bundle (Global + Synthetic)'
+          : tier === 'synthetic'
+            ? 'Synthetic Pro'
+            : 'Global Pro';
+      const durLabel = days >= 36500 ? 'Lifetime (100 yrs)' : `+${days} days`;
+      const expiryLines =
+        (updates.global_expires_at
+          ? `\nGlobal Expiry: \`${cleanMd(updates.global_expires_at)}\``
+          : '') +
+        (updates.pro_expires_at
+          ? `\nSynthetic Expiry: \`${cleanMd(updates.pro_expires_at)}\``
+          : '');
+
+      await this.sendMessage(
+        chatId,
+        `✅ *User Upgraded to ${planLabel}*\n` +
+          `─────────────────────\n` +
+          `User: \`@${displayUser}\`\n` +
+          `Duration: \`${durLabel}\`${expiryLines}`,
+        { parse_mode: 'Markdown' }
+      );
+    } catch (err) {
+      await this.sendMessage(chatId, `❌ Upgrade failed: \`${cleanMd(err.message)}\``, {
+        parse_mode: 'Markdown',
+      });
+    }
   }
 
   async _handleCheckExploits(msg) {
