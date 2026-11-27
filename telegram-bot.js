@@ -108,10 +108,15 @@ class MonitorService {
       return;
     }
 
-    const appUrl = process.env.APP_URL || process.env.RENDER_EXTERNAL_URL;
+    const appUrl =
+      process.env.APP_URL ||
+      process.env.RENDER_EXTERNAL_URL ||
+      (process.env.VERCEL_PROJECT_PRODUCTION_URL
+        ? `https://${process.env.VERCEL_PROJECT_PRODUCTION_URL}`
+        : null);
     if (appUrl) {
       this._registerWebhook(appUrl);
-    } else {
+    } else if (!process.env.VERCEL) {
       // Localhost / non-webhook mode: delete any stale webhook & start long-polling
       telegramApi('deleteWebhook', {}, this.botToken).then(() => {
         if (!this.isPolling) {
@@ -279,7 +284,7 @@ class MonitorService {
     }
 
     // Wrap all other commands with strict auth check
-    this._requireAuth(chatId, async () => {
+    await this._requireAuth(chatId, async () => {
       if (text === '/status') {
         await this._handleStatus(msg);
       } else if (text === '/revenue') {
@@ -310,26 +315,47 @@ class MonitorService {
     });
   }
 
-  _isSessionAuthenticated(chatId) {
+  async _isSessionAuthenticated(chatId) {
     const session = this.sessions.get(chatId);
-    if (!session?.authenticated) return false;
-
-    // Check expiration (8 hours)
-    if (Date.now() - session.authenticatedAt > this.SESSION_TTL_MS) {
-      this.sessions.delete(chatId);
-      return false;
+    if (session?.authenticated) {
+      if (Date.now() - session.authenticatedAt > this.SESSION_TTL_MS) {
+        this.sessions.delete(chatId);
+      } else {
+        session.authenticatedAt = Date.now();
+        return true;
+      }
     }
 
-    // Refresh expiry on activity
-    session.authenticatedAt = Date.now();
-    return true;
+    // Persist 8-hour FXH Lock session across Vercel serverless invocations via Supabase
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('id')
+        .eq('username', 'jasiel.abah')
+        .single();
+      if (profile) {
+        const { data: userData } = await supabase.auth.admin.getUserById(profile.id);
+        const expiresAt = Number(userData?.user?.user_metadata?.fxh_fc_session_until || 0);
+        if (expiresAt > Date.now()) {
+          this.sessions.set(chatId, {
+            authenticated: true,
+            authenticatedAt: Date.now(),
+            attempts: 0,
+            lockedAt: 0,
+          });
+          return true;
+        }
+      }
+    } catch (_) {}
+
+    return false;
   }
 
-  _requireAuth(chatId, callback) {
-    if (this._isSessionAuthenticated(chatId)) {
-      callback();
+  async _requireAuth(chatId, callback) {
+    if (await this._isSessionAuthenticated(chatId)) {
+      await callback();
     } else {
-      this.sendMessage(
+      await this.sendMessage(
         chatId,
         `🔒 *Session expired or not authenticated.*\n` +
           `Send: \`/auth <secret_token>\` or request a verification code via database using: \`/auth request_db\``,
@@ -471,6 +497,19 @@ class MonitorService {
       session.attempts = 0;
       session.lockedAt = 0;
       this.sessions.set(chatId, session);
+
+      try {
+        const { data: profile } = await supabase
+          .from('profiles')
+          .select('id')
+          .eq('username', 'jasiel.abah')
+          .single();
+        if (profile) {
+          await supabase.auth.admin.updateUserById(profile.id, {
+            user_metadata: { fxh_fc_session_until: Date.now() + this.SESSION_TTL_MS },
+          });
+        }
+      } catch (_) {}
 
       // Delete the user's /auth message so the secret token doesn't stay visible in chat history
       try {

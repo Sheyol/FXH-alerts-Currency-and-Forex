@@ -15,7 +15,8 @@ class SupabaseService {
     this.inFlightTriggers = new Set();
     this.onSymbolsChangedCallbacks = [];
 
-    setInterval(() => this._processFlushQueue(), 50);
+    const timer = setInterval(() => this._processFlushQueue(), 50);
+    if (typeof timer.unref === 'function') timer.unref();
   }
 
   onSymbolsChanged(cb) {
@@ -106,6 +107,10 @@ class SupabaseService {
         this.flushQueue.set(alertId, { alert, currentPrice, meta });
       }
     }
+  }
+
+  async flushNow() {
+    return this._processFlushQueue();
   }
 
   async _processFlushQueue() {
