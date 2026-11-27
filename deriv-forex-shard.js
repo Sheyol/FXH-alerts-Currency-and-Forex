@@ -133,10 +133,10 @@ class DerivForexShard {
     for (const symbol of this.subscribedSymbols) {
       const last = this.lastTickAt.get(symbol) || 0;
       if (last > 0 && now - last > 120000) {
-        console.warn(`[DerivForexShard] Stale feed detected for ${symbol}, re-subscribing...`);
-        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-          this.ws.send(JSON.stringify({ ticks: symbol, subscribe: 1 }));
-        }
+        console.warn(`[DerivForexShard] Stale feed detected for ${symbol}, reconnecting WS...`);
+        this.lastTickAt.set(symbol, now);
+        this._connect();
+        break;
       }
     }
   }

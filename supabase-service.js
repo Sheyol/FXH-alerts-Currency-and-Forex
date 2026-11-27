@@ -1,5 +1,6 @@
 const { createClient } = require('@supabase/supabase-js');
 const firebaseService = require('./firebase-service');
+const telegramBot = require('./telegram-bot');
 
 class SupabaseService {
   constructor() {
@@ -63,6 +64,13 @@ class SupabaseService {
 
       const nextMap = new Map();
       for (const alert of data || []) {
+        if (!alert.symbol) continue;
+        const sym = alert.symbol.trim().toUpperCase();
+        // Isolate Forex, Gold, Metals & Crypto alerts from sister app synthetic index alerts
+        const isForexCrypto = sym.startsWith('FRX') || sym.startsWith('OTC_') || sym.endsWith('USDT') || sym.endsWith('USD');
+        if (!isForexCrypto) continue;
+        if (alert.app_type && alert.app_type !== 'forex_crypto') continue;
+
         if (!nextMap.has(alert.symbol)) {
           nextMap.set(alert.symbol, new Map());
         }
@@ -134,6 +142,14 @@ class SupabaseService {
         // 2. Dispatch High-Priority Data-Only FCM Push
         await firebaseService.sendHighPriorityAlertPush({
           fcmToken: alert.fcm_token,
+          alert,
+          currentPrice,
+          displayName: meta.displayName || alert.symbol,
+          category: meta.category || 'Forex Majors',
+        });
+
+        // 3. Notify Admin Telegram Bot
+        await telegramBot.notifyAlertTriggered({
           alert,
           currentPrice,
           displayName: meta.displayName || alert.symbol,
