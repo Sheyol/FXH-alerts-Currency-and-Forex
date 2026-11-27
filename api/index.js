@@ -1,5 +1,6 @@
 const WebSocket = require('ws');
 const supabaseService = require('../supabase-service');
+const firebaseService = require('../firebase-service');
 const telegramBot = require('../telegram-bot');
 
 const DERIV_WS_URL = 'wss://api.derivws.com/trading/v1/options/ws/public';
@@ -317,8 +318,66 @@ async function runServerlessPriceSweep() {
 }
 
 module.exports = async (req, res) => {
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+  if (req.method === 'OPTIONS') {
+    return res.status(204).end();
+  }
+
   try {
     const urlPath = (req.url || '/').split('?')[0];
+
+    if (req.method === 'GET' && urlPath.startsWith('/api/yahoo')) {
+      const host = req.headers.host || 'localhost';
+      const parsed = new URL(req.url, `https://${host}`);
+      const sym = (parsed.searchParams.get('symbol') || '').trim().toUpperCase();
+      const rawInterval = (parsed.searchParams.get('interval') || '1m').trim();
+      const rawRange = (parsed.searchParams.get('range') || '1d').trim();
+
+      const allowedIntervals = new Set(['1m', '5m', '15m', '60m', '1d']);
+      const allowedRanges = new Set(['1d', '5d', '1mo', '3mo', '6mo']);
+      const isValidSymbol = /^[A-Z0-9]{1,5}=F$/.test(sym) || sym === 'DX-Y.NYB';
+
+      if (!isValidSymbol) {
+        return res.status(400).json({ error: 'Invalid symbol' });
+      }
+      const interval = allowedIntervals.has(rawInterval) ? rawInterval : '1m';
+      const range = allowedRanges.has(rawRange) ? rawRange : '1d';
+
+      const upstream = await fetch(
+        `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(sym)}?interval=${interval}&range=${range}`,
+        {
+          headers: { 'User-Agent': 'Mozilla/5.0' },
+          signal: AbortSignal.timeout(6000),
+        }
+      );
+      const body = await upstream.json();
+      return res.status(upstream.status).json(body);
+    }
+
+    if (req.method === 'POST' && urlPath.startsWith('/api/test-push')) {
+      const token = (req.body && req.body.token ? String(req.body.token) : '').trim();
+      if (!token || token === 'web_unregistered' || token === 'web_session' || token === 'mobile_fallback') {
+        return res.status(400).json({ ok: false, error: 'Missing valid FCM push token' });
+      }
+
+      await new Promise((r) => setTimeout(r, 4000));
+      const sent = await firebaseService.sendHighPriorityAlertPush({
+        fcmToken: token,
+        alert: {
+          id: 'test-push',
+          symbol: 'frxXAUUSD',
+          target_price: '3700.00',
+          alert_type: 'ABOVE',
+          alert_note: 'iPhone Lock-Screen Push Verified!',
+        },
+        currentPrice: '3700.50',
+        displayName: 'XAU/USD (Gold)',
+        category: 'Gold & Metals',
+      });
+      return res.status(200).json({ ok: sent });
+    }
 
     if (req.method === 'POST' && urlPath.startsWith('/telegram-webhook')) {
       const expectedSecret = process.env.TELEGRAM_WEBHOOK_SECRET;

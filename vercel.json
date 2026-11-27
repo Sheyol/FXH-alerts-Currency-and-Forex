@@ -6,10 +6,20 @@
       "maxDuration": 60
     }
   },
+  "headers": [
+    {
+      "source": "/firebase-messaging-sw.js",
+      "headers": [
+        { "key": "Cache-Control", "value": "public, max-age=0, must-revalidate" },
+        { "key": "Service-Worker-Allowed", "value": "/" }
+      ]
+    }
+  ],
   "rewrites": [
     { "source": "/health", "destination": "/api/index.js" },
     { "source": "/symbols", "destination": "/api/index.js" },
     { "source": "/telegram-webhook", "destination": "/api/index.js" },
-    { "source": "/", "destination": "/api/index.js" }
+    { "source": "/api/yahoo", "destination": "/api/index.js" },
+    { "source": "/api/test-push", "destination": "/api/index.js" }
   ]
 }

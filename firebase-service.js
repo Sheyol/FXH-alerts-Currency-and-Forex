@@ -64,6 +64,24 @@ class FirebaseService {
           },
         },
       },
+      webpush: {
+        headers: {
+          Urgency: 'high',
+          TTL: '86400',
+        },
+        notification: {
+          title: `🚨 ${displayName || alert.symbol} TARGET HIT!`,
+          body: `${displayName || alert.symbol} crossed ${alert.alert_type} ${alert.target_price} (Live: ${currentPrice})${alert.alert_note ? ' • ' + alert.alert_note : ''}`,
+          icon: '/icons/Icon-192.png',
+          badge: '/icons/Icon-192.png',
+          tag: String(alert.symbol),
+          renotify: true,
+          requireInteraction: true,
+        },
+        fcmOptions: {
+          link: '/',
+        },
+      },
     };
 
     if (!this.initialized) {
