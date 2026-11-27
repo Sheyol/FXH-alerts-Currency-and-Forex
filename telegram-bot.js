@@ -708,7 +708,7 @@ class MonitorService {
         .select('*', { count: 'exact', head: true })
         .eq('is_pro', true);
 
-      const mrr = (proUsers || 0) * 5.99;
+      const mrr = (proUsers || 0) * 6.99;
       const arr = mrr * 12;
 
       const response =
@@ -1152,7 +1152,7 @@ class MonitorService {
         .eq('is_pro', true);
       const conversionRate =
         totalUsers > 0 ? ((proUsers / totalUsers) * 100).toFixed(1) : '0.0';
-      const mrr = (proUsers || 0) * 5.99;
+      const mrr = (proUsers || 0) * 6.99;
       const arr = mrr * 12;
 
       await this.info(
